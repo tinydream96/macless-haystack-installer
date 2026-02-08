@@ -105,7 +105,44 @@ check_docker() {
 
 install_docker() {
     log_step "安装 Docker..."
-    curl -fsSL https://get.docker.com | sh
+    
+    # 检测发行版
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        DISTRO=$ID
+        VERSION_CODENAME=${VERSION_CODENAME:-$UBUNTU_CODENAME}
+    else
+        log_error "无法检测操作系统版本"
+        exit 1
+    fi
+    
+    # 目前仅支持 Ubuntu/Debian
+    if [[ "$DISTRO" != "ubuntu" && "$DISTRO" != "debian" ]]; then
+        log_warn "非 Ubuntu/Debian 系统，尝试使用官方脚本安装..."
+        curl -fsSL https://get.docker.com | sh
+    else
+        log_info "检测到 ${DISTRO} ${VERSION_CODENAME}，使用手动安装方式..."
+        
+        # 安装依赖
+        apt-get update -qq
+        apt-get install -y -qq ca-certificates curl gnupg
+        
+        # 添加 Docker GPG 密钥
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL "https://download.docker.com/linux/${DISTRO}/gpg" -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+        
+        # 添加 Docker 仓库
+        ARCH=$(dpkg --print-architecture)
+        echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${DISTRO} ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+        
+        # 更新并安装 Docker（仅安装必要组件，避免 docker-model-plugin 问题）
+        apt-get update -qq
+        apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin
+        
+        log_info "Docker 手动安装完成"
+    fi
+    
     systemctl enable docker
     systemctl start docker
     log_info "Docker 安装完成"
