@@ -336,8 +336,11 @@ interactive_login() {
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
-    # 使用 expect 自动填入账号密码
-    expect << EOF
+    # 创建临时文件捕获输出
+    local LOGIN_LOG=$(mktemp)
+    
+    # 使用 expect 自动填入账号密码，同时捕获输出
+    expect << EOF | tee "$LOGIN_LOG"
 set timeout -1
 spawn docker run -it --name $MH_CONTAINER -p ${MH_PORT}:${MH_PORT} --volume ${MH_VOLUME}:/app/endpoint/data --network $DOCKER_NETWORK $MH_IMAGE
 
@@ -360,6 +363,53 @@ expect {
 EOF
     
     echo ""
+    
+    # 检查登录是否有错误
+    local LOGIN_ERROR=0
+    
+    # 检查常见的登录错误模式
+    if grep -q "KeyError" "$LOGIN_LOG" 2>/dev/null; then
+        LOGIN_ERROR=1
+        log_error "检测到认证错误 (KeyError)，可能是账号或密码错误"
+    elif grep -q "Authentication failed" "$LOGIN_LOG" 2>/dev/null; then
+        LOGIN_ERROR=1
+        log_error "认证失败"
+    elif grep -q "Invalid credentials" "$LOGIN_LOG" 2>/dev/null; then
+        LOGIN_ERROR=1
+        log_error "凭据无效"
+    elif grep -q "Traceback" "$LOGIN_LOG" 2>/dev/null; then
+        LOGIN_ERROR=1
+        log_error "检测到程序异常"
+    fi
+    
+    # 清理临时日志
+    rm -f "$LOGIN_LOG"
+    
+    # 如果有错误，清理凭据并提示重试
+    if [ "$LOGIN_ERROR" -eq 1 ]; then
+        echo ""
+        log_error "登录失败！正在清理..."
+        
+        # 停止并删除容器
+        docker stop "$MH_CONTAINER" 2>/dev/null || true
+        docker rm "$MH_CONTAINER" 2>/dev/null || true
+        
+        # 删除凭据文件
+        rm -f "$CREDENTIALS_FILE"
+        log_warn "已删除保存的凭据文件"
+        
+        echo ""
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${YELLOW}  登录失败，请检查以下几点：                             ${NC}"
+        echo -e "${YELLOW}  1. 确认账号密码正确（可先在 appleid.apple.com 测试）   ${NC}"
+        echo -e "${YELLOW}  2. 如果是手机号，请确认格式正确（如 +86xxxxxxxxxx）   ${NC}"
+        echo -e "${YELLOW}  3. 密码中避免使用特殊字符（如 \$、\\、\"）             ${NC}"
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        log_info "请重新运行安装脚本，选择「全新安装」重新输入凭据"
+        return 1
+    fi
+    
     log_info "登录流程完成"
     
     # 重启容器以后台模式运行
