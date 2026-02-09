@@ -28,6 +28,7 @@ MH_IMAGE=""
 
 # ==================== 其他配置 ====================
 CREDENTIALS_FILE="$HOME/.mh-credentials"
+ENDPOINT_CREDENTIALS_FILE="$HOME/.mh-endpoint-credentials"
 DOCKER_NETWORK="mh-network"
 ANISETTE_CONTAINER="anisette"
 MH_CONTAINER="macless-haystack"
@@ -246,6 +247,104 @@ read_credentials() {
     fi
     APPLE_ID=$(sed -n '1p' "$CREDENTIALS_FILE")
     PASSWORD=$(sed -n '2p' "$CREDENTIALS_FILE")
+}
+
+# ==================== Web UI 凭据管理 ====================
+get_endpoint_credentials() {
+    echo ""
+    log_step "设置 Web UI 登录保护"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  设置后访问 http://IP:6176 需要输入账号密码               ${NC}"
+    echo -e "${YELLOW}  可防止他人未经授权访问您的 FindMy 服务                   ${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    read -p "是否设置 Web UI 登录保护？[Y/n] " set_auth
+    if [[ "$set_auth" =~ ^[Nn]$ ]]; then
+        log_warn "跳过 Web UI 登录保护设置"
+        rm -f "$ENDPOINT_CREDENTIALS_FILE"
+        return
+    fi
+    
+    read -p "Web UI 用户名: " endpoint_user
+    while [ -z "$endpoint_user" ]; do
+        log_error "用户名不能为空"
+        read -p "Web UI 用户名: " endpoint_user
+    done
+    
+    read -s -p "Web UI 密码: " endpoint_pass
+    echo ""
+    while [ -z "$endpoint_pass" ]; do
+        log_error "密码不能为空"
+        read -s -p "Web UI 密码: " endpoint_pass
+        echo ""
+    done
+    
+    # 保存凭据
+    echo "$endpoint_user" > "$ENDPOINT_CREDENTIALS_FILE"
+    echo "$endpoint_pass" >> "$ENDPOINT_CREDENTIALS_FILE"
+    chmod 600 "$ENDPOINT_CREDENTIALS_FILE"
+    
+    log_info "Web UI 凭据已保存"
+}
+
+configure_endpoint_auth() {
+    # 读取凭据
+    if [ ! -f "$ENDPOINT_CREDENTIALS_FILE" ]; then
+        return
+    fi
+    
+    local endpoint_user=$(sed -n '1p' "$ENDPOINT_CREDENTIALS_FILE")
+    local endpoint_pass=$(sed -n '2p' "$ENDPOINT_CREDENTIALS_FILE")
+    
+    # 如果没有设置凭据，跳过
+    if [ -z "$endpoint_user" ] || [ -z "$endpoint_pass" ]; then
+        return
+    fi
+    
+    log_step "配置 Web UI 登录保护..."
+    
+    # 等待容器完全启动并生成配置文件
+    sleep 5
+    
+    # 获取 config.ini 路径
+    local CONFIG_PATH="/var/lib/docker/volumes/${MH_VOLUME}/_data/config.ini"
+    
+    # 检查文件是否存在，最多等待 30 秒
+    local wait_count=0
+    while [ ! -f "$CONFIG_PATH" ] && [ $wait_count -lt 30 ]; do
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+    
+    if [ ! -f "$CONFIG_PATH" ]; then
+        log_warn "配置文件尚未创建，请手动配置 Web UI 登录"
+        log_info "配置文件路径: $CONFIG_PATH"
+        return
+    fi
+    
+    # 更新或添加 endpoint_user
+    if grep -q "^endpoint_user" "$CONFIG_PATH"; then
+        sed -i "s/^endpoint_user.*/endpoint_user = $endpoint_user/" "$CONFIG_PATH"
+    else
+        echo "" >> "$CONFIG_PATH"
+        echo "endpoint_user = $endpoint_user" >> "$CONFIG_PATH"
+    fi
+    
+    # 更新或添加 endpoint_pass
+    if grep -q "^endpoint_pass" "$CONFIG_PATH"; then
+        sed -i "s/^endpoint_pass.*/endpoint_pass = $endpoint_pass/" "$CONFIG_PATH"
+    else
+        echo "endpoint_pass = $endpoint_pass" >> "$CONFIG_PATH"
+    fi
+    
+    # 重启容器使配置生效
+    log_step "重启服务使配置生效..."
+    docker restart "$MH_CONTAINER" >/dev/null 2>&1
+    sleep 3
+    
+    log_info "✅ Web UI 登录保护已配置"
+    echo -e "  用户名: ${GREEN}$endpoint_user${NC}"
 }
 
 # ==================== 容器管理 ====================
@@ -472,10 +571,20 @@ EXPECT_EOF
     docker update --restart unless-stopped "$MH_CONTAINER" 2>/dev/null || true
     
     log_info "登录流程完成"
+    
+    # 配置 Web UI 登录保护
+    configure_endpoint_auth
+    
     echo ""
     log_info "✅ 部署完成！"
     echo ""
     echo -e "  访问地址: ${GREEN}http://$(hostname -I | awk '{print $1}'):${MH_PORT}${NC}"
+    if [ -f "$ENDPOINT_CREDENTIALS_FILE" ]; then
+        local ep_user=$(sed -n '1p' "$ENDPOINT_CREDENTIALS_FILE")
+        if [ -n "$ep_user" ]; then
+            echo -e "  登录用户: ${GREEN}$ep_user${NC}"
+        fi
+    fi
     echo ""
 }
 
@@ -533,6 +642,7 @@ main() {
                 setup_network
                 pull_images
                 get_credentials
+                get_endpoint_credentials
                 start_anisette
                 interactive_login
                 ;;
@@ -553,6 +663,7 @@ main() {
                     remove_containers
                     remove_volumes
                     rm -f "$CREDENTIALS_FILE"
+                    rm -f "$ENDPOINT_CREDENTIALS_FILE"
                     log_info "已完全重置，请重新运行脚本进行安装"
                 fi
                 ;;
