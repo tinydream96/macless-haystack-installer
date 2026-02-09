@@ -51,23 +51,24 @@ print_banner() {
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════╗"
     echo "║                                                           ║"
-    echo "║   🍎 Macless Haystack 一键安装工具 v${VERSION}               ║"
+    echo "║   🍎 Macless Haystack Installer v${VERSION}                  ║"
     echo "║                                                           ║"
-    echo "║   FindMy 网络服务器快速部署                               ║"
+    echo "║   FindMy Network Server Deployment Tool                   ║"
+    echo "║   FindMy 网络服务器快速部署工具                           ║"
     echo "║                                                           ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
 print_menu() {
-    echo -e "${BLUE}请选择操作：${NC}"
+    echo -e "${BLUE}请选择操作 (Select an option)：${NC}"
     echo ""
-    echo -e "  ${GREEN}1.${NC} 🚀 全新安装"
-    echo -e "  ${GREEN}2.${NC} 🔑 重新登录（保留数据）"
-    echo -e "  ${GREEN}3.${NC} 🔄 完全重置（删除所有数据）"
-    echo -e "  ${GREEN}4.${NC} 📊 查看服务状态"
-    echo -e "  ${GREEN}5.${NC} 🛑 停止所有服务"
-    echo -e "  ${GREEN}6.${NC} ❌ 退出"
+    echo -e "  ${GREEN}1.${NC} 🚀 全新安装 (Clean Install)"
+    echo -e "  ${GREEN}2.${NC} 🔑 重新登录（保留数据）(Re-login / Keep Data)"
+    echo -e "  ${GREEN}3.${NC} 🔄 完全重置（删除所有数据）(Full Reset / Delete All Data)"
+    echo -e "  ${GREEN}4.${NC} 📊 查看服务状态 (Check Status)"
+    echo -e "  ${GREEN}5.${NC} 🛑 停止所有服务 (Stop All Services)"
+    echo -e "  ${GREEN}6.${NC} ❌ 退出 (Exit)"
     echo ""
 }
 
@@ -90,8 +91,8 @@ log_step() {
 # ==================== 依赖检查 ====================
 check_root() {
     if [[ "$OS_TYPE" == "Linux" && "$EUID" -ne 0 ]]; then
-        log_error "请使用 root 用户运行此脚本"
-        log_info "运行: sudo bash $0"
+        log_error "请使用 root 用户运行此脚本 (Please run as root)"
+        log_info "运行 (Run): sudo bash $0"
         exit 1
     fi
 }
@@ -99,15 +100,15 @@ check_root() {
 check_docker() {
     if ! command -v docker &> /dev/null; then
         if [[ "$OS_TYPE" == "Darwin" ]]; then
-            log_error "未检测到 Docker，请先安装 Docker Desktop 或 OrbStack"
-            log_info "下载地址: https://www.docker.com/products/docker-desktop/"
+            log_error "未检测到 Docker，请先安装 Docker Desktop 或 OrbStack (Docker not found, please install Docker Desktop or OrbStack)"
+            log_info "下载地址 (Download): https://www.docker.com/products/docker-desktop/"
             exit 1
         else
-            log_warn "Docker 未安装，正在安装..."
+            log_warn "Docker 未安装，正在安装... (Docker not found, installing...)"
             install_docker
         fi
     else
-        log_info "Docker 已安装: $(docker --version)"
+        log_info "Docker 已安装 (Docker installed): $(docker --version)"
     fi
 }
 
@@ -129,7 +130,7 @@ install_docker() {
         log_warn "非 Ubuntu/Debian 系统，尝试使用官方脚本安装..."
         curl -fsSL https://get.docker.com | sh
     else
-        log_info "检测到 ${DISTRO} ${VERSION_CODENAME}，使用手动安装方式..."
+        log_info "检测到 ${DISTRO} ${VERSION_CODENAME}，使用手动安装方式... (Detected ${DISTRO} ${VERSION_CODENAME}, installing manually...)"
         
         # 安装依赖
         apt-get update -qq
@@ -148,7 +149,7 @@ install_docker() {
         apt-get update -qq
         apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin
         
-        log_info "Docker 手动安装完成"
+        log_info "Docker 手动安装完成 (Docker installation completed)"
     fi
     
     systemctl enable docker
@@ -167,10 +168,10 @@ check_expect() {
         elif command -v apk &> /dev/null; then
             apk add --quiet expect
         else
-            log_error "无法自动安装 expect，请手动安装"
+            log_error "无法自动安装 expect，请手动安装 (Cannot install expect automatically, please install manually)"
             exit 1
         fi
-        log_info "expect 安装完成"
+        log_info "expect 安装完成 (expect installed)"
     fi
 }
 
@@ -180,26 +181,26 @@ try_pull_image() {
     local backup="$2"
     local result_var="$3"
     
-    log_step "拉取镜像: $primary"
+    log_step "拉取镜像 (Pulling Image): $primary"
     if docker pull "$primary" 2>/dev/null; then
-        log_info "成功拉取主镜像: $primary"
+        log_info "成功拉取主镜像 (Primary image pulled): $primary"
         eval "$result_var='$primary'"
         return 0
     else
-        log_warn "主镜像拉取失败，尝试备用镜像: $backup"
+        log_warn "主镜像拉取失败，尝试备用镜像 (Primary failed, trying backup): $backup"
         if docker pull "$backup" 2>/dev/null; then
-            log_info "成功拉取备用镜像: $backup"
+            log_info "成功拉取备用镜像 (Backup image pulled): $backup"
             eval "$result_var='$backup'"
             return 0
         else
-            log_error "所有镜像源都无法访问！"
+            log_error "所有镜像源都无法访问！(All image sources are unreachable!)"
             return 1
         fi
     fi
 }
 
 pull_images() {
-    log_step "检查并拉取 Docker 镜像..."
+    log_step "检查并拉取 Docker 镜像 (Checking and pulling Docker images)..."
     
     # 拉取 Anisette 镜像
     if ! try_pull_image "$PRIMARY_ANISETTE_IMAGE" "$BACKUP_ANISETTE_IMAGE" "ANISETTE_IMAGE"; then
@@ -219,8 +220,8 @@ pull_images() {
 # ==================== 凭据管理 ====================
 get_credentials() {
     if [ -f "$CREDENTIALS_FILE" ]; then
-        log_info "发现已保存的凭据"
-        read -p "是否使用已保存的凭据？[Y/n] " use_saved
+        log_info "发现已保存的凭据 (Found saved credentials)"
+        read -p "是否使用已保存的凭据？[Y/n] (Use saved credentials? [Y/n]) " use_saved
         if [[ "$use_saved" =~ ^[Nn]$ ]]; then
             input_credentials
         fi
@@ -231,12 +232,12 @@ get_credentials() {
 
 input_credentials() {
     echo ""
-    log_step "请输入 Apple ID 凭据"
-    echo -e "${YELLOW}⚠️  建议使用专用小号，避免主账号风险${NC}"
+    log_step "请输入 Apple ID 凭据 (Enter Apple ID Credentials)"
+    echo -e "${YELLOW}⚠️  建议使用专用小号，避免主账号风险 (Use a burner account recommended)${NC}"
     echo ""
     
-    read -p "Apple ID (手机号/邮箱): " apple_id
-    read -s -p "密码: " password
+    read -p "Apple ID (手机号/邮箱/Email/Phone): " apple_id
+    read -s -p "密码 (Password): " password
     echo ""
     
     # 保存凭据
@@ -244,12 +245,12 @@ input_credentials() {
     echo "$password" >> "$CREDENTIALS_FILE"
     chmod 600 "$CREDENTIALS_FILE"
     
-    log_info "凭据已安全保存到 $CREDENTIALS_FILE"
+    log_info "凭据已安全保存到 (Credentials saved to) $CREDENTIALS_FILE"
 }
 
 read_credentials() {
     if [ ! -f "$CREDENTIALS_FILE" ]; then
-        log_error "凭据文件不存在，请先运行全新安装"
+        log_error "凭据文件不存在，请先运行全新安装 (Credentials not found, please run Clean Install first)"
         exit 1
     fi
     APPLE_ID=$(sed -n '1p' "$CREDENTIALS_FILE")
@@ -259,31 +260,31 @@ read_credentials() {
 # ==================== Web UI 凭据管理 ====================
 get_endpoint_credentials() {
     echo ""
-    log_step "设置 Web UI 登录保护"
+    log_step "设置 Web UI 登录保护 (Setup Web UI Protection)"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}  设置后访问 http://IP:6176 需要输入账号密码               ${NC}"
-    echo -e "${YELLOW}  可防止他人未经授权访问您的 FindMy 服务                   ${NC}"
+    echo -e "${YELLOW}  Protection prevents unauthorized access to FindMy service${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
-    read -p "是否设置 Web UI 登录保护？[Y/n] " set_auth
+    read -p "是否设置 Web UI 登录保护？[Y/n] (Enable Web UI Protection? [Y/n]) " set_auth
     if [[ "$set_auth" =~ ^[Nn]$ ]]; then
-        log_warn "跳过 Web UI 登录保护设置"
+        log_warn "跳过 Web UI 登录保护设置 (Skipping Web UI protection setup)"
         rm -f "$ENDPOINT_CREDENTIALS_FILE"
         return
     fi
     
-    read -p "Web UI 用户名: " endpoint_user
+    read -p "Web UI 用户名 (Username): " endpoint_user
     while [ -z "$endpoint_user" ]; do
-        log_error "用户名不能为空"
-        read -p "Web UI 用户名: " endpoint_user
+        log_error "用户名不能为空 (Username cannot be empty)"
+        read -p "Web UI 用户名 (Username): " endpoint_user
     done
     
-    read -s -p "Web UI 密码: " endpoint_pass
+    read -s -p "Web UI 密码 (Password): " endpoint_pass
     echo ""
     while [ -z "$endpoint_pass" ]; do
-        log_error "密码不能为空"
-        read -s -p "Web UI 密码: " endpoint_pass
+        log_error "密码不能为空 (Password cannot be empty)"
+        read -s -p "Web UI 密码 (Password): " endpoint_pass
         echo ""
     done
     
@@ -292,7 +293,7 @@ get_endpoint_credentials() {
     echo "$endpoint_pass" >> "$ENDPOINT_CREDENTIALS_FILE"
     chmod 600 "$ENDPOINT_CREDENTIALS_FILE"
     
-    log_info "Web UI 凭据已保存"
+    log_info "Web UI 凭据已保存 (Web UI credentials saved)"
 }
 
 configure_endpoint_auth() {
@@ -338,12 +339,12 @@ configure_endpoint_auth() {
     done
     
     if [[ $wait_count -eq 30 ]]; then
-        log_warn "配置文件尚未创建，请手动配置 Web UI 登录"
+        log_warn "配置文件尚未创建，请手动配置 Web UI 登录 (Config file not found, please configure manually)"
         return
     fi
 
     # 使用临时容器更新配置（跨平台通用）
-    log_step "更新 Web UI 凭据配置..."
+    log_step "更新 Web UI 凭据配置 (Updating Web UI credentials)..."
     docker run --rm -v "${MH_VOLUME}:/data" alpine sh -c "
         if grep -q '^endpoint_user' /data/config.ini; then
             sed -i 's/^endpoint_user.*/endpoint_user = $endpoint_user/' /data/config.ini
@@ -358,21 +359,21 @@ configure_endpoint_auth() {
     "
     
     # 重启容器使配置生效
-    log_step "重启服务使配置生效..."
+    log_step "重启服务使配置生效 (Restarting service to apply config)..."
     docker restart "$MH_CONTAINER" >/dev/null 2>&1
     sleep 3
     
-    log_info "✅ Web UI 登录保护已配置"
-    echo -e "  用户名: ${GREEN}$endpoint_user${NC}"
+    log_info "✅ Web UI 登录保护已配置 (Web UI Protection Configured)"
+    echo -e "  用户名 (Username): ${GREEN}$endpoint_user${NC}"
 }
 
 # ==================== 容器管理 ====================
 setup_network() {
     if ! docker network ls | grep -q "$DOCKER_NETWORK"; then
-        log_step "创建 Docker 网络: $DOCKER_NETWORK"
+        log_step "创建 Docker 网络 (Creating Docker network): $DOCKER_NETWORK"
         docker network create "$DOCKER_NETWORK"
     else
-        log_info "Docker 网络已存在: $DOCKER_NETWORK"
+        log_info "Docker 网络已存在 (Docker network exists): $DOCKER_NETWORK"
     fi
 }
 
@@ -391,12 +392,12 @@ start_anisette() {
     fi
 
     if docker ps -a --format '{{.Names}}' | grep -q "^${ANISETTE_CONTAINER}$"; then
-        log_info "Anisette 容器已存在，正在重新创建以应用配置..."
+        log_info "Anisette 容器已存在，正在重新创建以应用配置 (Recreating Anisette container)..."
         docker stop "$ANISETTE_CONTAINER" >/dev/null 2>&1 || true
         docker rm "$ANISETTE_CONTAINER" >/dev/null 2>&1 || true
     fi
 
-    log_step "启动 Anisette 服务..."
+    log_step "启动 Anisette 服务 (Starting Anisette service)..."
     docker run -d \
         --restart unless-stopped \
         --name "$ANISETTE_CONTAINER" \
@@ -407,11 +408,11 @@ start_anisette() {
         --host 0.0.0.0
     
     # 等待 Anisette 启动并确保可连接
-    log_info "等待 Anisette 服务就绪 (通常需要 20-40 秒)..."
+    log_info "等待 Anisette 服务就绪 (通常需要 20-40 秒) (Waiting for Anisette service, 20-40s)..."
     local wait_count=0
     while [ $wait_count -lt 30 ]; do
         if docker run --rm --network "$DOCKER_NETWORK" alpine sh -c "nc -z ${ANISETTE_CONTAINER} ${ANISETTE_PORT}" &>/dev/null; then
-            log_info "✅ Anisette 服务已就绪"
+            log_info "✅ Anisette 服务已就绪 (Anisette service ready)"
             return
         fi
         echo -n "."
@@ -419,24 +420,24 @@ start_anisette() {
         wait_count=$((wait_count + 1))
     done
     echo ""
-    log_error "Anisette 服务启动超时，请检查日志: docker logs anisette"
+    log_error "Anisette 服务启动超时，请检查日志 (Anisette timed out, check logs): docker logs anisette"
     exit 1
 }
 
 stop_containers() {
-    log_step "停止容器..."
+    log_step "停止容器 (Stopping containers)..."
     docker stop "$MH_CONTAINER" 2>/dev/null || true
     docker stop "$ANISETTE_CONTAINER" 2>/dev/null || true
 }
 
 remove_containers() {
-    log_step "删除容器..."
+    log_step "删除容器 (Removing containers)..."
     docker rm "$MH_CONTAINER" 2>/dev/null || true
     docker rm "$ANISETTE_CONTAINER" 2>/dev/null || true
 }
 
 remove_volumes() {
-    log_step "删除数据卷..."
+    log_step "删除数据卷 (Removing volumes)..."
     docker volume rm "$MH_VOLUME" 2>/dev/null || true
     docker volume rm "$ANISETTE_VOLUME" 2>/dev/null || true
 }
@@ -468,23 +469,27 @@ interactive_login() {
 
     if [ $HAS_AUTH -eq 1 ]; then
         echo ""
-        log_warn "检测到已存在的登录会话 (auth.json)"
-        read -p "是否清除旧会话并重新进行 2FA 认证？[y/N] " clear_auth
+        log_warn "检测到已存在的登录会话 (auth.json) (Found existing session)"
+        read -p "是否清除旧会话并重新进行 2FA 认证？[y/N] (Clear old session and re-authenticate? [y/N]) " clear_auth
         if [[ "$clear_auth" =~ ^[Yy]$ ]]; then
             docker run --rm -v "${MH_VOLUME}:/data" alpine rm -f /data/auth.json
-            log_info "已清理旧会话"
+            log_info "已清理旧会话 (Old session cleared)"
         fi
     fi
     
-    log_step "启动交互式登录..."
+    log_step "启动交互式登录 (Starting interactive login)..."
     echo ""
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}  📱 账号密码将自动填入，请等待输入验证码提示              ${NC}"
     echo -e "${YELLOW}  📲 验证码会发送到你的 Apple 设备                         ${NC}"
     echo -e "${YELLOW}  ⌨️  输入验证码后请按回车键确认                            ${NC}"
+    echo -e "${YELLOW}  -------------------------------------------------------  ${NC}"
+    echo -e "${YELLOW}  📱 Credentials will be auto-filled, wait for 2FA prompt  ${NC}"
+    echo -e "${YELLOW}  📲 Code will be sent to your Apple device                ${NC}"
+    echo -e "${YELLOW}  ⌨️  Press Enter after typing the code                     ${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo -e "${CYAN}  💡 当看到以下信息时，请按 Ctrl+C 继续后续配置：           ${NC}"
+    echo -e "${CYAN}  💡 当看到以下信息时，请按 Ctrl+C 继续后续配置 (Press Ctrl+C when you see)：${NC}"
     echo -e "${CYAN}     \"INFO - serving at :6176 over HTTP\"                  ${NC}"
     echo ""
     
@@ -585,16 +590,16 @@ EXPECT_EOF
     # 检查常见的登录错误模式
     if echo "$CONTAINER_LOGS" | grep -q "KeyError"; then
         LOGIN_ERROR=1
-        log_error "检测到认证错误 (KeyError)，可能是账号或密码错误"
+        log_error "检测到认证错误 (KeyError)，可能是账号或密码错误 (Auth Error: Check credentials)"
     elif echo "$CONTAINER_LOGS" | grep -q "Authentication failed"; then
         LOGIN_ERROR=1
-        log_error "认证失败"
+        log_error "认证失败 (Authentication failed)"
     elif echo "$CONTAINER_LOGS" | grep -q "Invalid credentials"; then
         LOGIN_ERROR=1
-        log_error "凭据无效"
+        log_error "凭据无效 (Invalid credentials)"
     elif echo "$CONTAINER_LOGS" | grep -q "Traceback" && ! echo "$CONTAINER_LOGS" | grep -q "Logged in"; then
         LOGIN_ERROR=1
-        log_error "检测到程序异常"
+        log_error "检测到程序异常 (Program Exception detected)"
     fi
     
     # 清理临时日志
@@ -603,7 +608,7 @@ EXPECT_EOF
     # 如果有错误，清理凭据并提示重试
     if [ "$LOGIN_ERROR" -eq 1 ]; then
         echo ""
-        log_error "登录失败！正在清理..."
+        log_error "登录失败！正在清理... (Login failed! Cleaning up...)"
         
         # 停止并删除容器
         docker stop "$MH_CONTAINER" 2>/dev/null || true
@@ -611,30 +616,34 @@ EXPECT_EOF
         
         # 删除凭据文件
         rm -f "$CREDENTIALS_FILE"
-        log_warn "已删除保存的凭据文件"
+        log_warn "已删除保存的凭据文件 (Credentials file deleted)"
         
         echo ""
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${YELLOW}  登录失败，请检查以下几点：                             ${NC}"
+        echo -e "${YELLOW}  登录失败，请检查以下几点 (Login Failed, check these)：   ${NC}"
         echo -e "${YELLOW}  1. 确认账号密码正确（可先在 appleid.apple.com 测试）   ${NC}"
+        echo -e "${YELLOW}     (Verify credentials on appleid.apple.com)           ${NC}"
         echo -e "${YELLOW}  2. 如果是手机号，请确认格式正确（如 +86xxxxxxxxxx）   ${NC}"
+        echo -e "${YELLOW}     (Check phone format e.g. +86...)                    ${NC}"
         echo -e "${YELLOW}  3. 密码中避免使用特殊字符（如 \$、\\、\"）             ${NC}"
+        echo -e "${YELLOW}     (Avoid special chars like \$ \\ \" in password)       ${NC}"
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
         log_info "请重新运行安装脚本，选择「全新安装」重新输入凭据"
+        log_info "(Please re-run script and choose 'Clean Install')"
         return 1
     fi
     
     # 检查容器是否还在运行
     if ! docker ps --format '{{.Names}}' | grep -q "^${MH_CONTAINER}$"; then
-        log_step "重启容器为后台模式..."
+        log_step "重启容器为后台模式 (Restarting container in background)..."
         docker start "$MH_CONTAINER" 2>/dev/null || docker restart "$MH_CONTAINER" 2>/dev/null || true
     fi
     
     # 设置自动重启策略
     docker update --restart unless-stopped "$MH_CONTAINER" 2>/dev/null || true
     
-    log_info "登录流程完成"
+    log_info "登录流程完成 (Login process completed)"
     
     # 配置 Web UI 登录保护
     configure_endpoint_auth
@@ -648,13 +657,13 @@ EXPECT_EOF
     fi
 
     echo ""
-    log_info "✅ 部署完成！"
+    log_info "✅ 部署完成！(Deployment Completed!)"
     echo ""
-    echo -e "  访问地址: ${GREEN}http://${SERVER_IP}:${MH_PORT}${NC}"
+    echo -e "  访问地址 (URL): ${GREEN}http://${SERVER_IP}:${MH_PORT}${NC}"
     if [ -f "$ENDPOINT_CREDENTIALS_FILE" ]; then
         local ep_user=$(sed -n '1p' "$ENDPOINT_CREDENTIALS_FILE")
         if [ -n "$ep_user" ]; then
-            echo -e "  登录用户: ${GREEN}$ep_user${NC}"
+            echo -e "  登录用户 (User): ${GREEN}$ep_user${NC}"
         fi
     fi
     echo ""
@@ -663,31 +672,32 @@ EXPECT_EOF
 # ==================== 状态检查 ====================
 show_status() {
     echo ""
-    log_step "服务状态"
+    log_step "服务状态 (Service Status)"
     echo ""
     
-    echo -e "${BLUE}容器状态:${NC}"
+    echo -e "${BLUE}容器状态 (Containers):${NC}"
     docker ps -a --filter "name=$ANISETTE_CONTAINER" --filter "name=$MH_CONTAINER" \
-        --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "  无运行中的容器"
+        --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "  无运行中的容器 (No running containers)"
     
     echo ""
-    echo -e "${BLUE}数据卷:${NC}"
-    docker volume ls --filter "name=$MH_VOLUME" --filter "name=$ANISETTE_VOLUME" 2>/dev/null || echo "  无数据卷"
+    echo -e "${BLUE}数据卷 (Volumes):${NC}"
+    docker volume ls --filter "name=$MH_VOLUME" --filter "name=$ANISETTE_VOLUME" 2>/dev/null || echo "  无数据卷 (No volumes)"
     
     echo ""
-    echo -e "${BLUE}使用的镜像:${NC}"
-    echo "  Anisette: ${ANISETTE_IMAGE:-未确定}"
-    echo "  Macless Haystack: ${MH_IMAGE:-未确定}"
+    echo -e "${BLUE}使用的镜像 (Images used):${NC}"
+    echo "  Anisette: ${ANISETTE_IMAGE:-未确定 (Unknown)}"
+    echo "  Macless Haystack: ${MH_IMAGE:-未确定 (Unknown)}"
     
     echo ""
     
     # 检查服务是否可访问
     if docker ps --format '{{.Names}}' | grep -q "^${MH_CONTAINER}$"; then
         local ip=$(hostname -I | awk '{print $1}')
-        echo -e "${GREEN}✅ 服务运行中${NC}"
-        echo -e "  访问地址: http://${ip}:${MH_PORT}"
+        [[ "$OS_TYPE" == "Darwin" ]] && ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || hostname)
+        echo -e "${GREEN}✅ 服务运行中 (Service Running)${NC}"
+        echo -e "  访问地址 (URL): http://${ip}:${MH_PORT}"
     else
-        echo -e "${YELLOW}⚠️  Macless Haystack 服务未运行${NC}"
+        echo -e "${YELLOW}⚠️  Macless Haystack 服务未运行 (Service not running)${NC}"
     fi
     echo ""
 }
@@ -699,13 +709,13 @@ main() {
     
     while true; do
         print_menu
-        read -p "请输入选项 [1-6]: " choice
+        read -p "请输入选项 [1-6] (Select option): " choice
         echo ""
         
         case $choice in
             1)
                 # 全新安装
-                log_step "开始全新安装..."
+                log_step "开始全新安装 (Starting Clean Install)..."
                 check_docker
                 check_expect
                 stop_containers
@@ -720,7 +730,7 @@ main() {
                 ;;
             2)
                 # 重新登录
-                log_step "重新登录..."
+                log_step "重新登录 (Re-login)..."
                 check_expect
                 get_credentials
                 start_anisette
@@ -728,15 +738,15 @@ main() {
                 ;;
             3)
                 # 完全重置
-                echo -e "${RED}⚠️  警告：这将删除所有数据，包括认证信息和配置！${NC}"
-                read -p "确定要继续吗？[y/N] " confirm
+                echo -e "${RED}⚠️  警告：这将删除所有数据，包括认证信息和配置！(Warning: This will delete ALL data)${NC}"
+                read -p "确定要继续吗？[y/N] (Continue? [y/N]) " confirm
                 if [[ "$confirm" =~ ^[Yy]$ ]]; then
                     stop_containers
                     remove_containers
                     remove_volumes
                     rm -f "$CREDENTIALS_FILE"
                     rm -f "$ENDPOINT_CREDENTIALS_FILE"
-                    log_info "已完全重置，请重新运行脚本进行安装"
+                    log_info "已完全重置，请重新运行脚本进行安装 (Reset complete)"
                 fi
                 ;;
             4)
@@ -746,20 +756,20 @@ main() {
             5)
                 # 停止服务
                 stop_containers
-                log_info "所有服务已停止"
+                log_info "所有服务已停止 (All services stopped)"
                 ;;
             6)
                 # 退出
-                log_info "再见！"
+                log_info "再见！(Goodbye!)"
                 exit 0
                 ;;
             *)
-                log_error "无效选项，请重新选择"
+                log_error "无效选项，请重新选择 (Invalid option)"
                 ;;
         esac
         
         echo ""
-        read -p "按 Enter 继续..."
+        read -p "按 Enter 继续... (Press Enter to continue)"
         clear
         print_banner
     done
