@@ -333,51 +333,103 @@ interactive_login() {
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}  账号密码将自动填入，请等待输入验证码提示                ${NC}"
     echo -e "${YELLOW}  验证码会发送到你的 Apple 设备                          ${NC}"
+    echo -e "${YELLOW}  输入验证码后请按回车键确认                             ${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
-    # 创建临时文件捕获输出
+    # 创建临时文件用于记录日志
     local LOGIN_LOG=$(mktemp)
+    local EXPECT_SCRIPT=$(mktemp)
     
-    # 使用 expect 自动填入账号密码，同时捕获输出
-    expect << EOF | tee "$LOGIN_LOG"
-set timeout -1
-spawn docker run -it --name $MH_CONTAINER -p ${MH_PORT}:${MH_PORT} --volume ${MH_VOLUME}:/app/endpoint/data --network $DOCKER_NETWORK $MH_IMAGE
+    # 写入 expect 脚本（避免 heredoc 转义问题）
+    cat > "$EXPECT_SCRIPT" << 'EXPECT_EOF'
+#!/usr/bin/expect -f
+set timeout 300
+set apple_id [lindex $argv 0]
+set password [lindex $argv 1]
+set container_name [lindex $argv 2]
+set port [lindex $argv 3]
+set volume [lindex $argv 4]
+set network [lindex $argv 5]
+set image [lindex $argv 6]
+set logfile [lindex $argv 7]
+
+log_file -noappend $logfile
+
+spawn docker run -it --name $container_name -p ${port}:${port} --volume ${volume}:/app/endpoint/data --network $network $image
 
 expect {
     "Apple ID:" {
-        send "$APPLE_ID\r"
+        send "$apple_id\r"
         exp_continue
     }
     "Password:" {
-        send "$PASSWORD\r"
+        send "$password\r"
         exp_continue
     }
-    "code:" {
-        interact
+    -re "code.*:" {
+        # 进入交互模式让用户输入验证码
+        expect_user -re "(.*)\n"
+        send "$expect_out(1,string)\r"
+        # 等待登录完成或出错
+        expect {
+            "Logged in" {
+                # 登录成功
+            }
+            "Error" {
+                # 出错
+            }
+            timeout {
+                # 超时，可能已经完成
+            }
+            eof {
+                # 容器退出
+            }
+        }
+    }
+    "Traceback" {
+        # Python 错误
+    }
+    "KeyError" {
+        # 认证错误
     }
     eof {
         # 容器退出
     }
 }
-EOF
+EXPECT_EOF
+    
+    chmod +x "$EXPECT_SCRIPT"
+    
+    # 执行 expect 脚本
+    "$EXPECT_SCRIPT" "$APPLE_ID" "$PASSWORD" "$MH_CONTAINER" "$MH_PORT" "$MH_VOLUME" "$DOCKER_NETWORK" "$MH_IMAGE" "$LOGIN_LOG" || true
+    
+    # 清理 expect 脚本
+    rm -f "$EXPECT_SCRIPT"
     
     echo ""
+    
+    # 等待一下让容器日志产生
+    sleep 2
+    
+    # 检查容器日志中是否有错误
+    local CONTAINER_LOGS=""
+    CONTAINER_LOGS=$(docker logs "$MH_CONTAINER" 2>&1 || cat "$LOGIN_LOG" 2>/dev/null || echo "")
     
     # 检查登录是否有错误
     local LOGIN_ERROR=0
     
     # 检查常见的登录错误模式
-    if grep -q "KeyError" "$LOGIN_LOG" 2>/dev/null; then
+    if echo "$CONTAINER_LOGS" | grep -q "KeyError"; then
         LOGIN_ERROR=1
         log_error "检测到认证错误 (KeyError)，可能是账号或密码错误"
-    elif grep -q "Authentication failed" "$LOGIN_LOG" 2>/dev/null; then
+    elif echo "$CONTAINER_LOGS" | grep -q "Authentication failed"; then
         LOGIN_ERROR=1
         log_error "认证失败"
-    elif grep -q "Invalid credentials" "$LOGIN_LOG" 2>/dev/null; then
+    elif echo "$CONTAINER_LOGS" | grep -q "Invalid credentials"; then
         LOGIN_ERROR=1
         log_error "凭据无效"
-    elif grep -q "Traceback" "$LOGIN_LOG" 2>/dev/null; then
+    elif echo "$CONTAINER_LOGS" | grep -q "Traceback" && ! echo "$CONTAINER_LOGS" | grep -q "Logged in"; then
         LOGIN_ERROR=1
         log_error "检测到程序异常"
     fi
@@ -410,15 +462,16 @@ EOF
         return 1
     fi
     
-    log_info "登录流程完成"
-    
-    # 重启容器以后台模式运行
-    log_step "重启容器为后台模式..."
-    docker restart "$MH_CONTAINER"
+    # 检查容器是否还在运行
+    if ! docker ps --format '{{.Names}}' | grep -q "^${MH_CONTAINER}$"; then
+        log_step "重启容器为后台模式..."
+        docker start "$MH_CONTAINER" 2>/dev/null || docker restart "$MH_CONTAINER" 2>/dev/null || true
+    fi
     
     # 设置自动重启策略
-    docker update --restart unless-stopped "$MH_CONTAINER"
+    docker update --restart unless-stopped "$MH_CONTAINER" 2>/dev/null || true
     
+    log_info "登录流程完成"
     echo ""
     log_info "✅ 部署完成！"
     echo ""
