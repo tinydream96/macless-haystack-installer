@@ -426,6 +426,17 @@ interactive_login() {
     # 确保旧容器已删除
     docker stop "$MH_CONTAINER" 2>/dev/null || true
     docker rm "$MH_CONTAINER" 2>/dev/null || true
+
+    # 如果是重新登录，询问是否清理旧 session
+    if [ -f "/var/lib/docker/volumes/${MH_VOLUME}/_data/auth.json" ]; then
+        echo ""
+        log_warn "检测到已存在的登录会话 (auth.json)"
+        read -p "是否清除旧会话并重新进行 2FA 认证？[y/N] " clear_auth
+        if [[ "$clear_auth" =~ ^[Yy]$ ]]; then
+            docker run --rm -v "${MH_VOLUME}:/data" alpine rm -f /data/auth.json
+            log_info "已清理旧会话"
+        fi
+    fi
     
     log_step "启动交互式登录..."
     echo ""
@@ -476,18 +487,30 @@ expect {
         # 等待登录完成或出错
         expect {
             "Logged in" {
-                # 登录成功
+                # 登录成功，继续等待服务就绪
+                exp_continue
+            }
+            "serving at :6176 over HTTP" {
+                # 服务已正常启动，可以安全退出交互模式
+                exit 0
             }
             "Error" {
                 # 出错
+                exit 1
             }
             timeout {
                 # 超时，可能已经完成
+                exit 0
             }
             eof {
                 # 容器退出
+                exit 1
             }
         }
+    }
+    "serving at :6176 over HTTP" {
+        # 如果直接跳过登录流程看到此消息
+        exit 0
     }
     "Traceback" {
         # Python 错误
