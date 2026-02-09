@@ -68,7 +68,9 @@ print_menu() {
     echo -e "  ${GREEN}3.${NC} 🔄 完全重置（删除所有数据）(Full Reset / Delete All Data)"
     echo -e "  ${GREEN}4.${NC} 📊 查看服务状态 (Check Status)"
     echo -e "  ${GREEN}5.${NC} 🛑 停止所有服务 (Stop All Services)"
-    echo -e "  ${GREEN}6.${NC} ❌ 退出 (Exit)"
+    echo -e "  ${GREEN}6.${NC} 🔐 修改 Web UI 密码 (Change Web UI Password)"
+    echo -e "  ${GREEN}7.${NC} ♻️  重启所有服务 (Restart All Services)"
+    echo -e "  ${GREEN}8.${NC} ❌ 退出 (Exit)"
     echo ""
 }
 
@@ -442,6 +444,75 @@ remove_volumes() {
     docker volume rm "$ANISETTE_VOLUME" 2>/dev/null || true
 }
 
+restart_services() {
+    log_step "重启所有服务 (Restarting all services)..."
+    docker restart "$ANISETTE_CONTAINER" 2>/dev/null || true
+    docker restart "$MH_CONTAINER" 2>/dev/null || true
+    log_info "服务重启指令已发送 (Restart command sent)"
+    show_status
+}
+
+modify_endpoint_credentials() {
+    log_step "修改 Web UI 密码 (Change Web UI Password)"
+    
+    # 获取新凭据
+    read -p "新用户名为 (New Username): " endpoint_user
+    while [ -z "$endpoint_user" ]; do
+        log_error "用户名不能为空 (Username cannot be empty)"
+        read -p "新用户名为 (New Username): " endpoint_user
+    done
+    
+    read -s -p "新密码为 (New Password): " endpoint_pass
+    echo ""
+    while [ -z "$endpoint_pass" ]; do
+        log_error "密码不能为空 (Password cannot be empty)"
+        read -s -p "新密码为 (New Password): " endpoint_pass
+        echo ""
+    done
+
+    # 更新本地凭据文件
+    echo "$endpoint_user" > "$ENDPOINT_CREDENTIALS_FILE"
+    echo "$endpoint_pass" >> "$ENDPOINT_CREDENTIALS_FILE"
+    chmod 600 "$ENDPOINT_CREDENTIALS_FILE"
+    log_info "本地凭据文件已更新 (Local credentials updated)"
+
+    # 检查容器/卷是否存在
+    if ! docker volume ls | grep -q "$MH_VOLUME"; then
+        log_error "数据卷不存在，请先安装服务 (Volume not found, please install first)"
+        return
+    fi
+    
+    # 检查 auth.json 确保服务已初始化
+    if ! docker run --rm -v "${MH_VOLUME}:/data" alpine ls /data/config.ini &>/dev/null; then
+         log_error "配置文件不存在，服务可能未初始化 (Config file not found, service might not be initialized)"
+         return
+    fi
+
+    log_step "正在更新配置文件... (Updating config file...)"
+    # 使用临时容器更新 config.ini
+    docker run --rm -v "${MH_VOLUME}:/data" alpine sh -c "
+        # 如果不存在则追加，存在则替换
+        if grep -q '^endpoint_user' /data/config.ini; then
+            sed -i 's/^endpoint_user.*/endpoint_user = $endpoint_user/' /data/config.ini
+        else
+            echo 'endpoint_user = $endpoint_user' >> /data/config.ini
+        fi
+        
+        if grep -q '^endpoint_pass' /data/config.ini; then
+            sed -i 's/^endpoint_pass.*/endpoint_pass = $endpoint_pass/' /data/config.ini
+        else
+            echo 'endpoint_pass = $endpoint_pass' >> /data/config.ini
+        fi
+    "
+    
+    log_info "配置已更新，正在重启服务... (Config updated, restarting service...)"
+    docker restart "$MH_CONTAINER" >/dev/null 2>&1
+    
+    sleep 2
+    log_info "✅Web UI 密码修改成功并已重启生效！(Web UI password changed and service restarted!)"
+    echo -e "  新用户 (New User): ${GREEN}$endpoint_user${NC}"
+}
+
 # ==================== 交互式登录 ====================
 interactive_login() {
     read_credentials
@@ -709,7 +780,7 @@ main() {
     
     while true; do
         print_menu
-        read -p "请输入选项 [1-6] (Select option): " choice
+        read -p "请输入选项 [1-8] (Select option): " choice
         echo ""
         
         case $choice in
@@ -759,6 +830,14 @@ main() {
                 log_info "所有服务已停止 (All services stopped)"
                 ;;
             6)
+                # 修改 Web UI 密码
+                modify_endpoint_credentials
+                ;;
+            7)
+                # 重启服务
+                restart_services
+                ;;
+            8)
                 # 退出
                 log_info "再见！(Goodbye!)"
                 exit 0
