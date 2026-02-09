@@ -430,10 +430,13 @@ interactive_login() {
     log_step "启动交互式登录..."
     echo ""
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  账号密码将自动填入，请等待输入验证码提示                ${NC}"
-    echo -e "${YELLOW}  验证码会发送到你的 Apple 设备                          ${NC}"
-    echo -e "${YELLOW}  输入验证码后请按回车键确认                             ${NC}"
+    echo -e "${YELLOW}  📱 账号密码将自动填入，请等待输入验证码提示              ${NC}"
+    echo -e "${YELLOW}  📲 验证码会发送到你的 Apple 设备                         ${NC}"
+    echo -e "${YELLOW}  ⌨️  输入验证码后请按回车键确认                            ${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${CYAN}  💡 当看到以下信息时，请按 Ctrl+C 继续后续配置：           ${NC}"
+    echo -e "${CYAN}     \"INFO - serving at :6176 over HTTP\"                  ${NC}"
     echo ""
     
     # 创建临时文件用于记录日志
