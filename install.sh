@@ -391,31 +391,36 @@ start_anisette() {
     fi
 
     if docker ps -a --format '{{.Names}}' | grep -q "^${ANISETTE_CONTAINER}$"; then
-        log_info "Anisette 容器已存在，正在重启..."
-        docker start "$ANISETTE_CONTAINER" 2>/dev/null || true
-    else
-        log_step "启动 Anisette 服务..."
-        docker run -d \
-            --restart always \
-            --name "$ANISETTE_CONTAINER" \
-            -p "${ANISETTE_PORT}:${ANISETTE_PORT}" \
-            --volume "${ANISETTE_VOLUME}:/home/Alcoholic/.config/anisette-v3" \
-            --network "$DOCKER_NETWORK" \
-            "$ANISETTE_IMAGE"
+        log_info "Anisette 容器已存在，正在重新创建以应用配置..."
+        docker stop "$ANISETTE_CONTAINER" >/dev/null 2>&1 || true
+        docker rm "$ANISETTE_CONTAINER" >/dev/null 2>&1 || true
     fi
+
+    log_step "启动 Anisette 服务..."
+    docker run -d \
+        --restart unless-stopped \
+        --name "$ANISETTE_CONTAINER" \
+        -p "${ANISETTE_PORT}:${ANISETTE_PORT}" \
+        --volume "${ANISETTE_VOLUME}:/home/Alcoholic/.config/anisette-v3" \
+        --network "$DOCKER_NETWORK" \
+        "$ANISETTE_IMAGE" \
+        --host 0.0.0.0
     
     # 等待 Anisette 启动并确保可连接
-    log_info "等待 Anisette 服务就绪..."
+    log_info "等待 Anisette 服务就绪 (通常需要 20-40 秒)..."
     local wait_count=0
-    while [ $wait_count -lt 15 ]; do
+    while [ $wait_count -lt 30 ]; do
         if docker run --rm --network "$DOCKER_NETWORK" alpine sh -c "nc -z ${ANISETTE_CONTAINER} ${ANISETTE_PORT}" &>/dev/null; then
-            log_info "Anisette 服务已就绪"
+            log_info "✅ Anisette 服务已就绪"
             return
         fi
+        echo -n "."
         sleep 2
         wait_count=$((wait_count + 1))
     done
-    log_warn "Anisette 服务启动较慢，继续尝试..."
+    echo ""
+    log_error "Anisette 服务启动超时，请检查日志: docker logs anisette"
+    exit 1
 }
 
 stop_containers() {
