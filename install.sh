@@ -11,7 +11,8 @@
 set -e
 
 # ==================== 版本信息 ====================
-VERSION="1.0.0"
+VERSION="1.1.0"
+OS_TYPE=$(uname)
 
 # ==================== 镜像配置 ====================
 # 主镜像（原作者）
@@ -88,7 +89,7 @@ log_step() {
 
 # ==================== 依赖检查 ====================
 check_root() {
-    if [ "$EUID" -ne 0 ]; then
+    if [[ "$OS_TYPE" == "Linux" && "$EUID" -ne 0 ]]; then
         log_error "请使用 root 用户运行此脚本"
         log_info "运行: sudo bash $0"
         exit 1
@@ -97,8 +98,14 @@ check_root() {
 
 check_docker() {
     if ! command -v docker &> /dev/null; then
-        log_warn "Docker 未安装，正在安装..."
-        install_docker
+        if [[ "$OS_TYPE" == "Darwin" ]]; then
+            log_error "未检测到 Docker，请先安装 Docker Desktop 或 OrbStack"
+            log_info "下载地址: https://www.docker.com/products/docker-desktop/"
+            exit 1
+        else
+            log_warn "Docker 未安装，正在安装..."
+            install_docker
+        fi
     else
         log_info "Docker 已安装: $(docker --version)"
     fi
@@ -307,36 +314,48 @@ configure_endpoint_auth() {
     # 等待容器完全启动并生成配置文件
     sleep 5
     
-    # 获取 config.ini 路径
+    # 获取 config.ini 路径 (考虑到 macOS/Linux 兼容性，尝试从本地和卷中检测)
     local CONFIG_PATH="/var/lib/docker/volumes/${MH_VOLUME}/_data/config.ini"
+    local USE_VOL_CMD=0
+    
+    if [[ "$OS_TYPE" == "Darwin" ]] || [ ! -f "$CONFIG_PATH" ]; then
+        # 在 macOS 或本地路径不可调时，使用临时容器检测
+        if docker run --rm -v "${MH_VOLUME}:/data" alpine ls /data/config.ini &>/dev/null; then
+           USE_VOL_CMD=1
+        fi
+    fi
     
     # 检查文件是否存在，最多等待 30 秒
     local wait_count=0
-    while [ ! -f "$CONFIG_PATH" ] && [ $wait_count -lt 30 ]; do
+    while [[ $wait_count -lt 30 ]]; do
+        if [[ $USE_VOL_CMD -eq 1 ]]; then
+            if docker run --rm -v "${MH_VOLUME}:/data" alpine ls /data/config.ini &>/dev/null; then break; fi
+        else
+            if [ -f "$CONFIG_PATH" ]; then break; fi
+        fi
         sleep 1
         wait_count=$((wait_count + 1))
     done
     
-    if [ ! -f "$CONFIG_PATH" ]; then
+    if [[ $wait_count -eq 30 ]]; then
         log_warn "配置文件尚未创建，请手动配置 Web UI 登录"
-        log_info "配置文件路径: $CONFIG_PATH"
         return
     fi
-    
-    # 更新或添加 endpoint_user
-    if grep -q "^endpoint_user" "$CONFIG_PATH"; then
-        sed -i "s/^endpoint_user.*/endpoint_user = $endpoint_user/" "$CONFIG_PATH"
-    else
-        echo "" >> "$CONFIG_PATH"
-        echo "endpoint_user = $endpoint_user" >> "$CONFIG_PATH"
-    fi
-    
-    # 更新或添加 endpoint_pass
-    if grep -q "^endpoint_pass" "$CONFIG_PATH"; then
-        sed -i "s/^endpoint_pass.*/endpoint_pass = $endpoint_pass/" "$CONFIG_PATH"
-    else
-        echo "endpoint_pass = $endpoint_pass" >> "$CONFIG_PATH"
-    fi
+
+    # 使用临时容器更新配置（跨平台通用）
+    log_step "更新 Web UI 凭据配置..."
+    docker run --rm -v "${MH_VOLUME}:/data" alpine sh -c "
+        if grep -q '^endpoint_user' /data/config.ini; then
+            sed -i 's/^endpoint_user.*/endpoint_user = $endpoint_user/' /data/config.ini
+        else
+            echo 'endpoint_user = $endpoint_user' >> /data/config.ini
+        fi
+        if grep -q '^endpoint_pass' /data/config.ini; then
+            sed -i 's/^endpoint_pass.*/endpoint_pass = $endpoint_pass/' /data/config.ini
+        else
+            echo 'endpoint_pass = $endpoint_pass' >> /data/config.ini
+        fi
+    "
     
     # 重启容器使配置生效
     log_step "重启服务使配置生效..."
@@ -385,9 +404,18 @@ start_anisette() {
             "$ANISETTE_IMAGE"
     fi
     
-    # 等待 Anisette 启动
-    log_info "等待 Anisette 服务启动..."
-    sleep 3
+    # 等待 Anisette 启动并确保可连接
+    log_info "等待 Anisette 服务就绪..."
+    local wait_count=0
+    while [ $wait_count -lt 15 ]; do
+        if docker run --rm --network "$DOCKER_NETWORK" alpine sh -c "nc -z ${ANISETTE_CONTAINER} ${ANISETTE_PORT}" &>/dev/null; then
+            log_info "Anisette 服务已就绪"
+            return
+        fi
+        sleep 2
+        wait_count=$((wait_count + 1))
+    done
+    log_warn "Anisette 服务启动较慢，继续尝试..."
 }
 
 stop_containers() {
@@ -428,7 +456,12 @@ interactive_login() {
     docker rm "$MH_CONTAINER" 2>/dev/null || true
 
     # 如果是重新登录，询问是否清理旧 session
-    if [ -f "/var/lib/docker/volumes/${MH_VOLUME}/_data/auth.json" ]; then
+    local HAS_AUTH=0
+    if docker run --rm -v "${MH_VOLUME}:/data" alpine ls /data/auth.json &>/dev/null; then
+        HAS_AUTH=1
+    fi
+
+    if [ $HAS_AUTH -eq 1 ]; then
         echo ""
         log_warn "检测到已存在的登录会话 (auth.json)"
         read -p "是否清除旧会话并重新进行 2FA 认证？[y/N] " clear_auth
@@ -601,10 +634,18 @@ EXPECT_EOF
     # 配置 Web UI 登录保护
     configure_endpoint_auth
     
+    # 获取 IP 地址
+    local SERVER_IP=""
+    if [[ "$OS_TYPE" == "Darwin" ]]; then
+        SERVER_IP=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || hostname)
+    else
+        SERVER_IP=$(hostname -I | awk '{print $1}')
+    fi
+
     echo ""
     log_info "✅ 部署完成！"
     echo ""
-    echo -e "  访问地址: ${GREEN}http://$(hostname -I | awk '{print $1}'):${MH_PORT}${NC}"
+    echo -e "  访问地址: ${GREEN}http://${SERVER_IP}:${MH_PORT}${NC}"
     if [ -f "$ENDPOINT_CREDENTIALS_FILE" ]; then
         local ep_user=$(sed -n '1p' "$ENDPOINT_CREDENTIALS_FILE")
         if [ -n "$ep_user" ]; then
