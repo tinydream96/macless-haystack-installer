@@ -8,11 +8,21 @@
 # 用法: curl -sSL https://raw.githubusercontent.com/tinydream96/macless-haystack-installer/main/install.sh | sudo bash
 #
 
-set -e
+# 注意：不使用 set -e，因为交互式菜单中大量命令可能返回非零值
+# 错误处理通过显式检查完成
 
 # ==================== 版本信息 ====================
-VERSION="1.1.0"
+VERSION="1.2.0"
 OS_TYPE=$(uname)
+
+# ==================== 临时文件清理 ====================
+CLEANUP_FILES=()
+cleanup() {
+    for f in "${CLEANUP_FILES[@]}"; do
+        rm -f "$f" 2>/dev/null
+    done
+}
+trap cleanup EXIT INT TERM
 
 # ==================== 镜像配置 ====================
 # 主镜像（原作者）
@@ -61,6 +71,25 @@ print_banner() {
 }
 
 print_menu() {
+    # 显示实时服务状态
+    local status_line=""
+    if command -v docker &>/dev/null; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${MH_CONTAINER}$"; then
+            local ip=""
+            if [[ "$OS_TYPE" == "Darwin" ]]; then
+                ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname)
+            else
+                ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+            fi
+            status_line="  ${GREEN}🟢 运行中 (Running)${NC} | 📍 http://${ip}:${MH_PORT}"
+        else
+            status_line="  ${RED}🔴 未运行 (Stopped)${NC}"
+        fi
+    else
+        status_line="  ${YELLOW}⚠️  Docker 未安装 (Docker not installed)${NC}"
+    fi
+    echo -e "$status_line"
+    echo ""
     echo -e "${BLUE}请选择操作 (Select an option)：${NC}"
     echo ""
     echo -e "  ${GREEN}1.${NC} 🚀 全新安装 (Clean Install)"
@@ -70,7 +99,8 @@ print_menu() {
     echo -e "  ${GREEN}5.${NC} 🛑 停止所有服务 (Stop All Services)"
     echo -e "  ${GREEN}6.${NC} 🔐 修改 Web UI 密码 (Change Web UI Password)"
     echo -e "  ${GREEN}7.${NC} ♻️  重启所有服务 (Restart All Services)"
-    echo -e "  ${GREEN}8.${NC} ❌ 退出 (Exit)"
+    echo -e "  ${GREEN}8.${NC} 👤 查看当前账户 (View Account Info)"
+    echo -e "  ${GREEN}9.${NC} ❌ 退出 (Exit)"
     echo ""
 }
 
@@ -317,24 +347,12 @@ configure_endpoint_auth() {
     # 等待容器完全启动并生成配置文件
     sleep 5
     
-    # 获取 config.ini 路径 (考虑到 macOS/Linux 兼容性，尝试从本地和卷中检测)
-    local CONFIG_PATH="/var/lib/docker/volumes/${MH_VOLUME}/_data/config.ini"
-    local USE_VOL_CMD=0
-    
-    if [[ "$OS_TYPE" == "Darwin" ]] || [ ! -f "$CONFIG_PATH" ]; then
-        # 在 macOS 或本地路径不可调时，使用临时容器检测
-        if docker run --rm -v "${MH_VOLUME}:/data" alpine ls /data/config.ini &>/dev/null; then
-           USE_VOL_CMD=1
-        fi
-    fi
-    
     # 检查文件是否存在，最多等待 30 秒
+    # 优先使用 docker exec（容器已在运行），避免反复启动临时容器
     local wait_count=0
     while [[ $wait_count -lt 30 ]]; do
-        if [[ $USE_VOL_CMD -eq 1 ]]; then
-            if docker run --rm -v "${MH_VOLUME}:/data" alpine ls /data/config.ini &>/dev/null; then break; fi
-        else
-            if [ -f "$CONFIG_PATH" ]; then break; fi
+        if docker exec "$MH_CONTAINER" test -f /app/endpoint/data/config.ini &>/dev/null; then
+            break
         fi
         sleep 1
         wait_count=$((wait_count + 1))
@@ -349,12 +367,12 @@ configure_endpoint_auth() {
     log_step "更新 Web UI 凭据配置 (Updating Web UI credentials)..."
     docker run --rm -v "${MH_VOLUME}:/data" alpine sh -c "
         if grep -q '^endpoint_user' /data/config.ini; then
-            sed -i 's/^endpoint_user.*/endpoint_user = $endpoint_user/' /data/config.ini
+            sed -i 's|^endpoint_user.*|endpoint_user = $endpoint_user|' /data/config.ini
         else
             echo 'endpoint_user = $endpoint_user' >> /data/config.ini
         fi
         if grep -q '^endpoint_pass' /data/config.ini; then
-            sed -i 's/^endpoint_pass.*/endpoint_pass = $endpoint_pass/' /data/config.ini
+            sed -i 's|^endpoint_pass.*|endpoint_pass = $endpoint_pass|' /data/config.ini
         else
             echo 'endpoint_pass = $endpoint_pass' >> /data/config.ini
         fi
@@ -493,13 +511,13 @@ modify_endpoint_credentials() {
     docker run --rm -v "${MH_VOLUME}:/data" alpine sh -c "
         # 如果不存在则追加，存在则替换
         if grep -q '^endpoint_user' /data/config.ini; then
-            sed -i 's/^endpoint_user.*/endpoint_user = $endpoint_user/' /data/config.ini
+            sed -i 's|^endpoint_user.*|endpoint_user = $endpoint_user|' /data/config.ini
         else
             echo 'endpoint_user = $endpoint_user' >> /data/config.ini
         fi
         
         if grep -q '^endpoint_pass' /data/config.ini; then
-            sed -i 's/^endpoint_pass.*/endpoint_pass = $endpoint_pass/' /data/config.ini
+            sed -i 's|^endpoint_pass.*|endpoint_pass = $endpoint_pass|' /data/config.ini
         else
             echo 'endpoint_pass = $endpoint_pass' >> /data/config.ini
         fi
@@ -567,19 +585,23 @@ interactive_login() {
     # 创建临时文件用于记录日志
     local LOGIN_LOG=$(mktemp)
     local EXPECT_SCRIPT=$(mktemp)
+    # 注册到全局清理列表，确保异常退出时也能清理
+    CLEANUP_FILES+=("$LOGIN_LOG" "$EXPECT_SCRIPT")
     
     # 写入 expect 脚本（避免 heredoc 转义问题）
+    # 安全改进：敏感信息通过环境变量传递，不会出现在 ps 进程列表中
     cat > "$EXPECT_SCRIPT" << 'EXPECT_EOF'
 #!/usr/bin/expect -f
 set timeout 300
-set apple_id [lindex $argv 0]
-set password [lindex $argv 1]
-set container_name [lindex $argv 2]
-set port [lindex $argv 3]
-set volume [lindex $argv 4]
-set network [lindex $argv 5]
-set image [lindex $argv 6]
-set logfile [lindex $argv 7]
+# 从环境变量读取敏感信息，避免通过命令行参数暴露
+set apple_id $env(MH_APPLE_ID)
+set password $env(MH_PASSWORD)
+set container_name [lindex $argv 0]
+set port [lindex $argv 1]
+set volume [lindex $argv 2]
+set network [lindex $argv 3]
+set image [lindex $argv 4]
+set logfile [lindex $argv 5]
 
 log_file -noappend $logfile
 
@@ -640,8 +662,9 @@ EXPECT_EOF
     
     chmod +x "$EXPECT_SCRIPT"
     
-    # 执行 expect 脚本
-    "$EXPECT_SCRIPT" "$APPLE_ID" "$PASSWORD" "$MH_CONTAINER" "$MH_PORT" "$MH_VOLUME" "$DOCKER_NETWORK" "$MH_IMAGE" "$LOGIN_LOG" || true
+    # 执行 expect 脚本（敏感信息通过环境变量传递，不暴露在 ps 中）
+    MH_APPLE_ID="$APPLE_ID" MH_PASSWORD="$PASSWORD" \
+        "$EXPECT_SCRIPT" "$MH_CONTAINER" "$MH_PORT" "$MH_VOLUME" "$DOCKER_NETWORK" "$MH_IMAGE" "$LOGIN_LOG" || true
     
     # 清理 expect 脚本
     rm -f "$EXPECT_SCRIPT"
@@ -773,6 +796,78 @@ show_status() {
     echo ""
 }
 
+# ==================== 账户信息 ====================
+show_account_info() {
+    echo ""
+    log_step "当前账户信息 (Account Info)"
+    echo ""
+    
+    # Apple ID 凭据
+    echo -e "${BLUE}━━━ Apple ID ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    if [ -r "$CREDENTIALS_FILE" ]; then
+        local saved_id=$(sed -n '1p' "$CREDENTIALS_FILE")
+        local saved_pass=$(sed -n '2p' "$CREDENTIALS_FILE")
+        if [ -n "$saved_id" ]; then
+            echo -e "  账号 (Apple ID): ${GREEN}${saved_id}${NC}"
+            # 密码脱敏：只显示前2位和后1位，中间用 * 替代
+            if [ -n "$saved_pass" ]; then
+                local pass_len=${#saved_pass}
+                if [ $pass_len -le 4 ]; then
+                    local masked=$(printf '%*s' "$pass_len" | tr ' ' '*')
+                else
+                    local masked="${saved_pass:0:2}$(printf '%*s' $((pass_len - 3)) | tr ' ' '*')${saved_pass: -1}"
+                fi
+                echo -e "  密码 (Password): ${YELLOW}${masked}${NC}"
+            else
+                echo -e "  密码 (Password): ${RED}未设置 (Not set)${NC}"
+            fi
+        else
+            echo -e "  ${YELLOW}凭据文件为空 (Credentials file is empty)${NC}"
+        fi
+        echo -e "  文件 (File): ${CYAN}${CREDENTIALS_FILE}${NC}"
+    elif [ -f "$CREDENTIALS_FILE" ]; then
+        echo -e "  ${YELLOW}🔒 凭据文件存在但无读取权限 (Permission denied)${NC}"
+        echo -e "  ${YELLOW}   请使用 sudo 运行此脚本 (Please run with sudo)${NC}"
+        echo -e "  文件 (File): ${CYAN}${CREDENTIALS_FILE}${NC}"
+    else
+        echo -e "  ${YELLOW}未配置 (Not configured) — 请先运行全新安装${NC}"
+    fi
+    
+    echo ""
+    
+    # Web UI 凭据
+    echo -e "${BLUE}━━━ Web UI 登录保护 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    if [ -r "$ENDPOINT_CREDENTIALS_FILE" ]; then
+        local ep_user=$(sed -n '1p' "$ENDPOINT_CREDENTIALS_FILE")
+        local ep_pass=$(sed -n '2p' "$ENDPOINT_CREDENTIALS_FILE")
+        if [ -n "$ep_user" ]; then
+            echo -e "  用户名 (Username): ${GREEN}${ep_user}${NC}"
+            if [ -n "$ep_pass" ]; then
+                local ep_len=${#ep_pass}
+                if [ $ep_len -le 4 ]; then
+                    local ep_masked=$(printf '%*s' "$ep_len" | tr ' ' '*')
+                else
+                    local ep_masked="${ep_pass:0:2}$(printf '%*s' $((ep_len - 3)) | tr ' ' '*')${ep_pass: -1}"
+                fi
+                echo -e "  密码 (Password): ${YELLOW}${ep_masked}${NC}"
+            else
+                echo -e "  密码 (Password): ${RED}未设置 (Not set)${NC}"
+            fi
+        else
+            echo -e "  ${YELLOW}未启用 Web UI 保护 (Web UI protection not enabled)${NC}"
+        fi
+        echo -e "  文件 (File): ${CYAN}${ENDPOINT_CREDENTIALS_FILE}${NC}"
+    elif [ -f "$ENDPOINT_CREDENTIALS_FILE" ]; then
+        echo -e "  ${YELLOW}🔒 凭据文件存在但无读取权限 (Permission denied)${NC}"
+        echo -e "  ${YELLOW}   请使用 sudo 运行此脚本 (Please run with sudo)${NC}"
+        echo -e "  文件 (File): ${CYAN}${ENDPOINT_CREDENTIALS_FILE}${NC}"
+    else
+        echo -e "  ${YELLOW}未启用 (Not enabled) — 可在安装时设置或选择菜单 6 配置${NC}"
+    fi
+    
+    echo ""
+}
+
 # ==================== 主菜单 ====================
 main() {
     check_root
@@ -780,12 +875,27 @@ main() {
     
     while true; do
         print_menu
-        read -p "请输入选项 [1-8] (Select option): " choice
+        read -p "请输入选项 [1-9] (Select option): " choice
         echo ""
         
         case $choice in
             1)
                 # 全新安装
+                # 安全检查：如果已有安装数据，警告用户
+                if command -v docker &>/dev/null && docker volume ls -q 2>/dev/null | grep -q "^${MH_VOLUME}$"; then
+                    echo ""
+                    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                    echo -e "${RED}  ⚠️  检测到已有安装数据！                                   ${NC}"
+                    echo -e "${RED}  全新安装将删除所有现有数据（认证、配置等）！               ${NC}"
+                    echo -e "${RED}  WARNING: Clean install will DELETE all existing data!      ${NC}"
+                    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                    echo ""
+                    read -p "确定要继续吗？输入 y 确认 (Continue? Type y to confirm) [y/N]: " confirm_clean
+                    if [[ ! "$confirm_clean" =~ ^[Yy]$ ]]; then
+                        log_info "已取消全新安装 (Clean install cancelled)"
+                        continue
+                    fi
+                fi
                 log_step "开始全新安装 (Starting Clean Install)..."
                 check_docker
                 check_expect
@@ -838,6 +948,10 @@ main() {
                 restart_services
                 ;;
             8)
+                # 查看当前账户
+                show_account_info
+                ;;
+            9)
                 # 退出
                 log_info "再见！(Goodbye!)"
                 exit 0
